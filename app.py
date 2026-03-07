@@ -3,6 +3,8 @@ import re
 import requests
 import json
 from datetime import datetime
+from io import BytesIO
+from PIL import Image
 from google_play_scraper import app as play_app
 from google import genai
 from google.genai import types
@@ -34,7 +36,9 @@ def get_google_play_info(play_url):
             "最近更新时间": clean_date(result.get('updated')),
             "更新日志": result.get('recentChanges', '无'),
             "应用描述": result.get('description', '无')[:1500],
-            "内购价格区间": result.get('inAppProductPrice', '无数据')
+            "内购价格区间": result.get('inAppProductPrice', '无数据'),
+            # 新增：抓取前 3 张商店截图的 URL
+            "截图": result.get('screenshots', [])[:3] 
         }
     except Exception as e:
         return {"error": f"Google Play 抓取失败: {str(e)}"}
@@ -58,28 +62,57 @@ def get_app_store_info(apple_url):
             "更新日志": result.get('releaseNotes', '无'),
             "应用描述": result.get('description', '无')[:1500],
             "价格": result.get('price', 0.0),
-            "主分类": result.get('primaryGenreName')
+            "主分类": result.get('primaryGenreName'),
+            # 新增：抓取前 3 张商店截图的 URL
+            "截图": result.get('screenshotUrls', [])[:3]
         }
     except Exception as e:
         return {"error": f"App Store 抓取失败: {str(e)}"}
+
+# ================= 1.5 图片加载模块 =================
+
+def load_image_from_url(url):
+    """将图片 URL 转换为 PIL Image 对象供 AI 识别"""
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return Image.open(BytesIO(response.content))
+    except Exception as e:
+        print(f"图片加载失败 {url}: {e}")
+        return None
 
 # ================= 2. AI 核心分析模块 =================
 
 def analyze_game_with_ai(game_data, api_key):
     client = genai.Client(api_key=api_key)
-    data_str = json.dumps(game_data, indent=2, ensure_ascii=False)
     
+    # 将文本数据准备好（移除截图 URL，避免干扰文本阅读）
+    text_data_for_ai = {}
+    image_objects = []
+    
+    for platform, data in game_data.items():
+        text_data_for_ai[platform] = {k: v for k, v in data.items() if k != "截图"}
+        # 加载真实图片
+        if "截图" in data:
+            for img_url in data["截图"]:
+                img = load_image_from_url(img_url)
+                if img:
+                    image_objects.append(img)
+                    
+    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=False)
+    
+    # 核心调整：修改 Prompt 逻辑，强制看图
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼发行总监。
-    请根据提供的竞品应用商店数据（包含描述、内购项、更新日志等），深度拆解该游戏。
-    请以专业、简练的行业术语输出，不要说废话。
+    我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。
+    请深度拆解该游戏，以专业、简练的行业术语输出。
     严格按照以下 Markdown 格式输出：
     
     ### 1. 市场定位
-    (受众人群画像、核心差异化卖点)
+    (结合文本推断受众人群画像、核心差异化卖点)
     
-    ### 2. 游戏画风
-    (结合描述推测视觉风格，以及对目标市场的适配度)
+    ### 2. 游戏画风（视觉拆解）
+    (⚠️ 务必直接观察提供的真实截图，详细分析其色彩饱和度、2D/3D表现、UI排版风格、美术题材等视觉特征。切勿盲目相信商店文案的自吹自擂！)
     
     ### 3. 玩法类型
     (核心玩法、是否融合了副玩法)
@@ -95,10 +128,13 @@ def analyze_game_with_ai(game_data, api_key):
     """
 
     try:
-        # 使用 Gemini 2.5 Flash-Lite 保证响应速度与接口权限匹配
+        # 构建多模态输入内容：文本 + 图片列表
+        contents_list = [f"以下是抓取到的游戏商店基础数据：\n{data_str}\n\n同时附上真实的商店截图。请结合图文开始你的拆解分析。"]
+        contents_list.extend(image_objects) # 把转换后的 PIL Image 对象塞进内容列表里
+
         response = client.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=f"以下是抓取到的游戏商店数据：\n{data_str}\n\n请开始你的拆解分析。",
+            model='gemini-2.5-flash-lite', # 保持使用 2.5 Flash-Lite
+            contents=contents_list,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=0.3, 
@@ -113,25 +149,21 @@ def analyze_game_with_ai(game_data, api_key):
 st.set_page_config(page_title="竞品智能拆解工具", page_icon="🎮", layout="wide")
 
 st.title("🎮 海外竞品智能拆解工具")
-st.markdown("输入竞品的应用商店链接，一键生成包含核心玩法、商业化及 LiveOps 推测的结构化报告。")
+st.markdown("输入竞品的应用商店链接，AI将结合**商店数据与真实截图**，一键生成结构化拆解报告。")
 
-# 侧边栏：配置 API Key
 with st.sidebar:
     st.header("⚙️ 设置")
-    # 提供密码输入框，保护隐私
     api_key = st.text_input("输入你的 Gemini API Key", type="password")
     st.markdown("[获取 Gemini API Key](https://aistudio.google.com/app/apikey)")
     st.divider()
-    st.caption("注：本工具不会存储您的 API Key，刷新页面后需重新输入。")
+    st.caption("注：本工具不会存储您的 API Key。")
 
-# 主界面：输入框
 col1, col2 = st.columns(2)
 with col1:
-    gp_url = st.text_input("Google Play 商店链接", placeholder="例如: https://play.google.com/store/apps/details?id=com.supercell.brawlstars")
+    gp_url = st.text_input("Google Play 商店链接")
 with col2:
-    ios_url = st.text_input("App Store 商店链接", placeholder="例如: https://apps.apple.com/us/app/brawl-stars/id1229016807")
+    ios_url = st.text_input("App Store 商店链接")
 
-# 触发按钮
 if st.button("🚀 一键提取并分析", type="primary", use_container_width=True):
     if not api_key:
         st.error("⚠️ 请先在左侧栏输入您的 Gemini API Key！")
@@ -142,14 +174,11 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
         st.stop()
 
     game_data = {}
-    
-    # 状态展示区域
     status_container = st.empty()
     
     with status_container.container():
-        # 抓取数据
         if gp_url:
-            with st.spinner("正在抓取 Google Play 数据..."):
+            with st.spinner("正在抓取 Google Play 数据与截图..."):
                 gp_result = get_google_play_info(gp_url)
                 if "error" in gp_result:
                     st.error(gp_result["error"])
@@ -158,7 +187,7 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                     st.success("✅ Google Play 数据抓取成功！")
                     
         if ios_url:
-            with st.spinner("正在抓取 App Store 数据..."):
+            with st.spinner("正在抓取 App Store 数据与截图..."):
                 ios_result = get_app_store_info(ios_url)
                 if "error" in ios_result:
                     st.error(ios_result["error"])
@@ -166,17 +195,26 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                     game_data["App Store"] = ios_result
                     st.success("✅ App Store 数据抓取成功！")
                     
-    # 如果成功抓取到任何数据，开始 AI 分析
     if game_data:
         st.divider()
-        st.subheader("🤖 AI 制作人深度拆解报告")
+        st.subheader("🤖 AI 制作人图文联合拆解报告")
         
-        with st.spinner("AI 正在深度解码系统设计与商业化逻辑，请稍候..."):
+        # 在前端展示一下抓取到的图片，证明我们确实拿到了图
+        st.markdown("**🔍 分析所参考的真实截图：**")
+        img_cols = st.columns(6)
+        col_idx = 0
+        for p, d in game_data.items():
+            if "截图" in d:
+                for url in d["截图"]:
+                    img_cols[col_idx % 6].image(url, use_container_width=True)
+                    col_idx += 1
+        
+        with st.spinner("AI 正在观察游戏截图并深度解码系统设计，请稍候..."):
             report = analyze_game_with_ai(game_data, api_key)
             
-        # 渲染最终报告
         st.markdown(report)
         
-        # 折叠面板：查看原始抓取数据（方便 Debug 和对齐数据）
-        with st.expander("查看抓取到的原始商店数据"):
-            st.json(game_data)
+        with st.expander("查看抓取到的原始商店文本数据"):
+            # 过滤掉截图URL，只展示文本
+            clean_data = {p: {k: v for k, v in d.items() if k != "截图"} for p, d in game_data.items()}
+            st.json(clean_data)
