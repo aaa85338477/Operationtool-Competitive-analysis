@@ -99,7 +99,7 @@ def analyze_game_with_ai(game_data, api_key):
                 if img:
                     image_objects.append(img)
                     
-    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=False)
+    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
     # 核心调整：修改 Prompt 逻辑，强制看图
     system_instruction = """
