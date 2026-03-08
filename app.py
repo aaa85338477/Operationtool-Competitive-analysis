@@ -51,7 +51,8 @@ def get_app_store_info(apple_url):
         return {"error": "无法从链接中提取 App Store ID"}
     app_id = match.group(1)
     try:
-        url = f"[https://itunes.apple.com/lookup?id=](https://itunes.apple.com/lookup?id=){app_id}&country=us"
+        # 修复了被误转为 Markdown 语法的 URL
+        url = f"https://itunes.apple.com/lookup?id={app_id}&country=us"
         response = requests.get(url)
         data = response.json()
         if data['resultCount'] == 0:
@@ -92,12 +93,13 @@ def render_dynamic_content(text):
         if block.startswith(marker + 'mermaid'):
             # 渲染 Mermaid 核心循环图
             mermaid_code = block.replace(marker + 'mermaid', '').replace(marker, '').strip()
+            # 修复了 JS CDN 链接被误转为 Markdown 语法的问题
             mermaid_html = f"""
             <div class="mermaid" style="display: flex; justify-content: center;">
                 {mermaid_code}
             </div>
             <script type="module">
-                import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
+                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
                 mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
             </script>
             """
