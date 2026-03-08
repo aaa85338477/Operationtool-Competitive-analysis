@@ -78,8 +78,7 @@ def load_image_from_url(url):
         response.raise_for_status()
         img = Image.open(BytesIO(response.content))
         
-        # 关键修复：去除原图自带的 EXIF / Metadata
-        # 商店截图常包含带中文字符的元数据，导致 AI SDK 内部转换图片格式时触发 ASCII 编码崩溃
+        # 去除原图自带的 EXIF / Metadata，防止图片元数据引发解析异常
         clean_img = Image.new('RGB', img.size)
         clean_img.paste(img.convert('RGB'))
         return clean_img
@@ -194,8 +193,8 @@ def analyze_game_with_ai(game_data, api_key):
                 if img:
                     image_objects.append(img)
                     
-    # 恢复 ensure_ascii=False，直接传递中文文本给大模型，节省 token 消耗
-    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=False)
+    # 彻底修复 ASCII 报错：务必将中文字符转码为安全的 \uXXXX Unicode 纯符号，绝不要改为 False
+    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼发行总监。
