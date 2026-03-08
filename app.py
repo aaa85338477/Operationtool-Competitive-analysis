@@ -76,7 +76,14 @@ def load_image_from_url(url):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
-        return Image.open(BytesIO(response.content))
+        img = Image.open(BytesIO(response.content))
+        
+        # 关键修复：去除原图自带的 EXIF / Metadata
+        # 商店截图常包含带中文字符的元数据，导致 AI SDK 内部转换图片格式时触发 ASCII 编码崩溃
+        clean_img = Image.new('RGB', img.size)
+        clean_img.paste(img.convert('RGB'))
+        return clean_img
+        
     except Exception as e:
         print(f"图片加载失败 {url}: {e}")
         return None
@@ -187,7 +194,8 @@ def analyze_game_with_ai(game_data, api_key):
                 if img:
                     image_objects.append(img)
                     
-    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
+    # 恢复 ensure_ascii=False，直接传递中文文本给大模型，节省 token 消耗
+    data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=False)
     
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼发行总监。
