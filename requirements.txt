@@ -5,3 +5,4 @@ google-genai>=0.3.0
 Pillow>=10.0.0
 plotly>=5.18.0
 pandas>=2.1.0
+yt-dlp>=2024.03.10
