@@ -376,11 +376,19 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                         else:
                             st.info("⬇️ 正在循环提取 YouTube 视频流...")
                             urls = [u.strip() for u in yt_url_text.split('\n') if u.strip()][:5]
+                            
+                            # 核心修复点：添加伪装参数以绕过 YouTube 的 403 Forbidden 封锁
                             ydl_opts = {
                                 'format': 'b[ext=mp4]/best', 
                                 'outtmpl': '%(id)s.%(ext)s',
                                 'quiet': True,
-                                'noplaylist': True
+                                'noplaylist': True,
+                                # 伪装成 Android 和 Web 客户端以突破 YouTube 限制
+                                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                                # 伪装常见浏览器 User-Agent
+                                'http_headers': {
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                }
                             }
                             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                                 for url in urls:
