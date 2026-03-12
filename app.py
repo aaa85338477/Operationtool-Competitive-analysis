@@ -6,6 +6,7 @@ import json
 import tempfile
 import os
 import time
+import html
 from datetime import datetime
 from io import BytesIO
 from PIL import Image
@@ -95,35 +96,41 @@ def load_image_from_url(url):
 
 def render_dynamic_content(text):
     """动态解析 Markdown，渲染 Mermaid 流程图及 JSON 驱动的高级图表"""
-    marker = "\x60\x60\x60"
+    marker = "\x60"
     
-    # 增强型正则，兼容 AI 输出时附带的空格、换行及大小写差异
-    pattern = r'(' + marker + r'\s*(?:mermaid|json)[\s\S]*?' + marker + r')'
+    # 增强型正则：匹配3个或更多连续反引号，兼容 AI 输出时附带的各种异常格式与换行
+    pattern = r'(' + marker + r'{3,}[ \t]*(?:mermaid|json)[ \t]*\n[\s\S]*?' + marker + r'{3,})'
     blocks = re.split(pattern, text, flags=re.IGNORECASE)
     
     for block in blocks:
         stripped_block = block.strip()
+        if not stripped_block:
+            continue
         
         # 匹配 mermaid
-        if re.match(r'^' + marker + r'\s*mermaid', stripped_block, re.IGNORECASE):
-            mermaid_code = re.sub(r'^' + marker + r'\s*mermaid\s*', '', stripped_block, flags=re.IGNORECASE)
-            mermaid_code = re.sub(r'\s*' + marker + r'$', '', mermaid_code).strip()
+        if re.match(r'^' + marker + r'{3,}[ \t]*mermaid', stripped_block, re.IGNORECASE):
+            # 精准剥离代码块外壳
+            mermaid_code = re.sub(r'^' + marker + r'{3,}[ \t]*mermaid[ \t]*\n', '', stripped_block, flags=re.IGNORECASE)
+            mermaid_code = re.sub(r'\n?[ \t]*' + marker + r'{3,}$', '', mermaid_code).strip()
+            
+            # 安全转义，防止内容包含 < 或 > 等字符破坏 HTML 结构导致白屏
+            safe_mermaid = html.escape(mermaid_code)
             
             mermaid_html = f"""
             <div class="mermaid" style="display: flex; justify-content: center;">
-                {mermaid_code}
+                {safe_mermaid}
             </div>
             <script type="module">
-                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+                import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
                 mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
             </script>
             """
             components.html(mermaid_html, height=450, scrolling=True)
             
         # 匹配 json
-        elif re.match(r'^' + marker + r'\s*json', stripped_block, re.IGNORECASE):
-            json_str = re.sub(r'^' + marker + r'\s*json\s*', '', stripped_block, flags=re.IGNORECASE)
-            json_str = re.sub(r'\s*' + marker + r'$', '', json_str).strip()
+        elif re.match(r'^' + marker + r'{3,}[ \t]*json', stripped_block, re.IGNORECASE):
+            json_str = re.sub(r'^' + marker + r'{3,}[ \t]*json[ \t]*\n', '', stripped_block, flags=re.IGNORECASE)
+            json_str = re.sub(r'\n?[ \t]*' + marker + r'{3,}$', '', json_str).strip()
             
             try:
                 data = json.loads(json_str)
@@ -190,8 +197,7 @@ def render_dynamic_content(text):
                 st.code(json_str, language='json')
                 
         else:
-            if stripped_block:
-                st.markdown(block)
+            st.markdown(block)
 
 # ================= 2. 官方原生 API 核心分析模块 =================
 
@@ -214,7 +220,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
                     
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
-    # 核心升级：新增“第8项”翻拍脚本逆向指令，强制输出 Markdown 表格
+    # 核心升级：新增“第8项”翻拍脚本逆向指令，强制输出 Markdown 表格，并强化图表与列表格式规范
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
     我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条完整的买量视频(UA Videos)】。
@@ -227,11 +233,12 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     - **核心差异化卖点**：...)
     
     ### 2. 游戏画风（视觉拆解）
-    (⚠️ 务必直接观察提供的真实截图，必须严格按照以下格式【分点列出】详细分析：
-    - **色彩饱和度**：...
-    - **2D/3D表现**：...
-    - **UI排版风格**：...
-    - **美术题材特征**：...)
+    (⚠️ 务必直接观察提供的真实截图，**必须严格按照以下无序列表格式，每一点强制换行**：
+    - **色彩饱和度**：[你的分析...]
+    - **2D/3D表现**：[你的分析...]
+    - **UI排版风格**：[你的分析...]
+    - **美术题材特征**：[你的分析...]
+    )
     
     ### 3. 玩法类型
     (请简要概括：核心玩法、是否融合了副玩法)
@@ -239,7 +246,11 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     ### 4. 核心循环推测 (Core Loop)
     请先用一段简练的文字概括玩家的单局或中长线行为闭环。
     然后，**必须**使用 Mermaid 流程图代码来可视化这个核心循环。
-    要求：代码必须包裹在 \x60\x60\x60mermaid 和 \x60\x60\x60 之间。
+    【⚠️ 极其重要的 Mermaid 语法要求】：
+    1. 代码必须严格包裹在 \x60\x60\x60mermaid 和 \x60\x60\x60 之间。
+    2. 所有节点的文本**必须使用双引号包裹**，以防特殊字符导致渲染崩溃！
+       ✅ 正确示范：A["建造/升级"] -->|"产出(金币)"| B("获取资源")
+       ❌ 错误示范：A[建造/升级] --> B(获取资源)
     
     ### 5. 成长与付费系统推测
     (仅提供文字分析，请按照以下格式【分点推测】：
