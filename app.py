@@ -288,7 +288,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
             contents_list.extend(gemini_video_files)
 
         response = client.models.generate_content(
-            model='gemini-3.1-flash-lite-preview-thinking-high',
+            model='gemini-2.5-flash',
             contents=contents_list,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
