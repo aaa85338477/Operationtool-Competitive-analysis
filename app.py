@@ -196,7 +196,6 @@ def render_dynamic_content(text):
 # ================= 2. 官方原生 API 核心分析模块 =================
 
 def get_gemini_client(api_key):
-    # 恢复官方直连，移除了代理 base_url
     return genai.Client(api_key=api_key)
 
 def analyze_game_with_ai(game_data, gemini_video_files, api_key):
@@ -215,6 +214,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
                     
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
+    # 核心升级：新增“第8项”翻拍脚本逆向指令，强制输出 Markdown 表格
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
     我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条完整的买量视频(UA Videos)】。
@@ -254,6 +254,11 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     - **如果包含了 UA 视频**：请充分发挥你对视频画面、BGM和台词的多模态理解能力，交叉比对提炼“起量公式”。重点分析：【前3秒黄金Hook设计】、【剧情反转或核心冲突点】、【BGM/音效的作用】、【素材包装套路与真实玩法的差异(Fake Ad诊断)】。
     - **如果没有提供视频**：请直接输出“未上传买量视频，跳过此环节深度分析”。)
     
+    ### 8. 爆款视频翻拍脚本逆向 (Storyboard Extraction)
+    (⚠️ 务必检查输入内容中是否包含了原生买量视频。
+    - **如果包含了 UA 视频**：请挑选其中表现力最强的一条视频，扮演“买量创意总监”，将其逆向拆解为可让外包团队直接执行的【分镜头脚本】。**必须输出一个标准的 Markdown 表格**，表头必须严格包含：| 时间轴 (如0s-3s) | 画面描述 (镜头/运镜/场景) | 音效与BGM | 包装文案/字幕 |。
+    - **如果没有提供视频**：请直接输出“未上传买量视频，跳过翻拍脚本生成”。)
+    
     ---
     ### 📊 结构化可视化数据
     在所有的文字分析结束后，**必须**附带唯一一段纯 JSON 代码（使用 \x60\x60\x60json 和 \x60\x60\x60 包裹），用于生成图表。
@@ -279,11 +284,11 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
         
         # 将原生的视频 File 对象直接传给模型
         if gemini_video_files:
-            contents_list.append("\n\n---\n以下是用户提供的【多条原生核心买量视频】。请仔细观看画面、聆听声音，交叉比对提取买量公式：")
+            contents_list.append("\n\n---\n以下是用户提供的【多条原生核心买量视频】。请仔细观看画面、聆听声音，交叉比对提取买量公式，并逆向生成分镜头脚本：")
             contents_list.extend(gemini_video_files)
 
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.1-flash-lite-preview-thinking-high',
             contents=contents_list,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -299,7 +304,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
 st.set_page_config(page_title="竞品智能拆解工具", page_icon="🎮", layout="wide")
 
 st.title("🎮 海外竞品智能拆解工具")
-st.markdown("输入竞品商店链接并**批量提供买量视频**，AI将生成包含图文解析、买量套路拆解及图表全景的深度报告。")
+st.markdown("输入竞品商店链接并**批量提供买量视频**，AI将生成包含图文解析、图表全景及**一键翻拍脚本**的深度报告。")
 
 with st.sidebar:
     st.header("⚙️ 设置")
@@ -317,8 +322,8 @@ with col2:
     ios_url = st.text_input("App Store 商店链接")
 
 # --- UA 视频批量输入区 ---
-st.subheader("📺 2. 附加：买量视频批量解析 (原生视频解析)")
-st.info("💡 采用原生多模态引擎：AI不仅会“看”画面，还能“听”到音效和台词，完美提炼起量公式。")
+st.subheader("📺 2. 附加：买量视频深度诊断与脚本逆向")
+st.info("💡 采用原生多模态引擎：AI不仅提炼起量公式，还能将爆款视频逆向还原为可供执行的【分镜头脚本表格】！")
 
 ua_video_option = st.radio("选择提供视频的方式：", ["⬆️ 上传本地视频 (推荐，支持批量)", "🔗 输入 YouTube 视频链接 (批量)"])
 ua_video_uploads = []
@@ -330,7 +335,7 @@ else:
     yt_url_text = st.text_area("YouTube 视频链接 (支持多行批量输入，每行粘贴一个链接，最多建议 3-5 个)")
     st.caption("⚠️ 注：系统将尝试使用无头浏览器和伪装头绕过 YouTube 反爬机制。若极端情况仍报错，请改用本地上传。")
 
-if st.button("🚀 一键提取并分析", type="primary", use_container_width=True):
+if st.button("🚀 一键提取并深度分析", type="primary", use_container_width=True):
     if not api_key:
         st.error("⚠️ 请先在左侧栏输入您的 API Key！")
         st.stop()
@@ -434,7 +439,7 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
     # 3. 开始 AI 聚合分析
     if game_data:
         st.divider()
-        st.subheader("🤖 AI 制作人全案拆解报告 (含 UA 共性提炼)")
+        st.subheader("🤖 AI 制作人全案拆解报告")
         
         store_img_urls = []
         for p, d in game_data.items():
