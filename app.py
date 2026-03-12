@@ -86,6 +86,7 @@ def load_image_from_url(url):
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         img = Image.open(BytesIO(response.content))
+        # 剥离原图 EXIF，防止元数据含中文引发崩溃
         clean_img = Image.new('RGB', img.size)
         clean_img.paste(img.convert('RGB'))
         return clean_img
@@ -94,7 +95,7 @@ def load_image_from_url(url):
         return None
 
 def render_dynamic_content(text):
-    """动态解析 Markdown，遇到 Mermaid 画流程图，遇到 JSON 画雷达图、饼图和甘特图"""
+    """动态解析 Markdown，渲染 Mermaid 流程图及 JSON 驱动的高级图表"""
     marker = "\x60\x60\x60"
     pattern = r'(' + marker + r'(?:mermaid|json).*?' + marker + r')'
     blocks = re.split(pattern, text, flags=re.DOTALL)
@@ -119,6 +120,7 @@ def render_dynamic_content(text):
                 data = json.loads(json_str)
                 has_visuals = False
                 
+                # ==== 第 1 排：养成雷达图 + 付费饼图 ====
                 if "progression_radar" in data and "monetization_pie" in data:
                     has_visuals = True
                     st.write("---") 
@@ -140,6 +142,22 @@ def render_dynamic_content(text):
                         fig_pie.update_traces(hole=.4, hoverinfo="label+percent") 
                         st.plotly_chart(fig_pie, use_container_width=True)
                 
+                # ==== 第 2 排：UA 素材特征雷达图 ====
+                # 只有当包含此字段且值不全为0时渲染（防止未上传视频时显示空表）
+                if "ua_features_radar" in data and any(v > 0 for v in data["ua_features_radar"].values()):
+                    has_visuals = True
+                    st.write("---")
+                    col_ua, _ = st.columns([1, 1]) # 让图表保持适当比例，不至于拉得太宽
+                    with col_ua:
+                        ua_data = data["ua_features_radar"]
+                        df_ua = pd.DataFrame(dict(r=list(ua_data.values()), theta=list(ua_data.keys())))
+                        df_ua = pd.concat([df_ua, df_ua.iloc[[0]]], ignore_index=True)
+                        fig_ua = px.line_polar(df_ua, r='r', theta='theta', line_close=True, title="🎬 UA买量特征画像 (提炼自上传素材)")
+                        fig_ua.update_traces(fill='toself', line_color='#FF0055') # 亮粉色区分 UA 特征
+                        fig_ua.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])))
+                        st.plotly_chart(fig_ua, use_container_width=True)
+                
+                # ==== 第 3 排：LiveOps 甘特图 ====
                 if "liveops_timeline" in data:
                     has_visuals = True
                     timeline_data = data["liveops_timeline"]
@@ -172,7 +190,7 @@ def render_dynamic_content(text):
 
 # ================= 2. AI 核心分析模块 =================
 
-def analyze_game_with_ai(game_data, gemini_video_file, api_key):
+def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     client = genai.Client(api_key=api_key)
     
     text_data_for_ai = {}
@@ -186,11 +204,12 @@ def analyze_game_with_ai(game_data, gemini_video_file, api_key):
                 if img:
                     image_objects.append(img)
                     
+    # 转码确保安全传输
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
-    我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【买量视频(UA Video)】。
+    我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条买量视频(UA Videos)】。
     请深度拆解该游戏，以专业、简练的行业术语输出。
     严格按照以下 Markdown 格式输出：
     
@@ -214,10 +233,11 @@ def analyze_game_with_ai(game_data, gemini_video_file, api_key):
     ### 6. LiveOps 设计推测
     (仅提供文字分析，分析更新频率和日志内容，推测其长线运营节奏)
     
-    ### 7. 买量素材深度诊断 (UA Video Analysis)
+    ### 7. 买量素材批量拆解 (UA Creative Batch Analysis)
     (⚠️ 务必检查输入内容中是否包含了买量视频。
-    - **如果包含了 UA 视频**：请重点发挥你的视听觉多模态能力，深度分析该视频的：【前3秒黄金Hook (视觉与听觉刺激)】、【视频剧情走向与节奏】、【BGM与音效的作用】以及【与真实玩法的差异度(Fake Ad / 擦边球判断)】。
-    - **如果没有提供视频**：请直接输出“未上传买量视频，跳过此环节的深度分析”。)
+    - **如果包含了多个 UA 视频**：请发挥你的多模态能力，交叉比对这些视频，并提炼其“起量公式”。重点分析：【通用的前3秒黄金Hook】、【共同刺激的受众情绪痛点(如：强迫症、同情弱者、解压)】、【素材包装套路与真实玩法的差异】。
+    - **如果仅包含一个视频**：深度诊断该单一视频的上述各项视听觉特征。
+    - **如果没有提供视频**：请直接输出“未上传买量视频，跳过此环节深度分析”。)
     
     ---
     ### 📊 结构化可视化数据
@@ -226,25 +246,26 @@ def analyze_game_with_ai(game_data, gemini_video_file, api_key):
     {
       "progression_radar": {"等级与基础属性": 8, "装备与词条": 9, "技能与流派拓展": 5, "外观收集": 3, "其他养成": 6}, 
       "monetization_pie": {"抽卡/开箱": 40, "战令/通行证": 30, "破冰/限时礼包": 20, "资源直购": 10},
+      "ua_features_radar": {"解压ASMR (Satisfying)": 8, "故意失败 (Fail Ad)": 9, "剧情反转 (Drama)": 4, "智商碾压 (IQ Test)": 7, "擦边/猎奇 (Bizarre)": 3},
       "liveops_timeline": [
-        {"Event": "当前版本更新", "Start": "2023-10-01", "Finish": "2023-10-01", "Type": "版本更新"},
-        {"Event": "S1 赛季战令开启", "Start": "2023-10-05", "Finish": "2023-11-05", "Type": "赛季更新"}
+        {"Event": "当前版本更新", "Start": "2023-10-01", "Finish": "2023-10-01", "Type": "版本更新"}
       ]
     }
     注意：
     - progression_radar 代表养成深度打分（满分10分），正好5个维度。
     - monetization_pie 代表核心付费点占比，各项数值相加必须为 100。
-    - liveops_timeline 请根据抓取到的"最近更新时间"，向后合理推演未来 3 个月的模拟排期！包含 Event(事件名)、Start(开始时间 YYYY-MM-DD)、Finish(结束时间 YYYY-MM-DD)、Type(事件类型)。
+    - ua_features_radar 代表这批买量素材的吸睛特征强度（满分10分），必须正好5个维度。**如果没有上传视频，请将此项的5个值全部填 0！**
+    - liveops_timeline 请根据抓取到的"最近更新时间"，向后合理推演未来 3 个月的模拟排期！包含 Event, Start(YYYY-MM-DD), Finish(YYYY-MM-DD), Type。
     """
 
     try:
         contents_list = [f"以下是抓取到的游戏商店基础数据：\n{data_str}\n\n同时附带了一些真实的商店截图，请先阅读。"]
         contents_list.extend(image_objects)
         
-        # 将视频文件追加给大模型
-        if gemini_video_file:
-            contents_list.append("\n\n---\n以下是用户提供的该游戏【核心买量视频】。请务必结合视频画面和声音完成分析：")
-            contents_list.append(gemini_video_file)
+        # 将多个视频文件批量追加给大模型
+        if gemini_video_files:
+            contents_list.append("\n\n---\n以下是用户提供的该游戏【多条核心买量视频】。请务必交叉对比这些视频画面和声音，提炼买量共性：")
+            contents_list.extend(gemini_video_files)
 
         response = client.models.generate_content(
             model='gemini-2.5-flash-lite',
@@ -263,7 +284,7 @@ def analyze_game_with_ai(game_data, gemini_video_file, api_key):
 st.set_page_config(page_title="竞品智能拆解工具", page_icon="🎮", layout="wide")
 
 st.title("🎮 海外竞品智能拆解工具")
-st.markdown("输入竞品商店链接并**提供买量视频**，AI将生成包含图文/视频解析的全案结构化拆解报告。")
+st.markdown("输入竞品商店链接并**批量提供买量视频**，AI将生成包含图文解析、买量套路拆解及图表全景的深度报告。")
 
 with st.sidebar:
     st.header("⚙️ 设置")
@@ -280,18 +301,19 @@ with col1:
 with col2:
     ios_url = st.text_input("App Store 商店链接")
 
-# --- UA 视频输入区 ---
-st.subheader("📺 2. 附加：买量视频 (UA Video) 深度视听觉分析")
-st.info("💡 视频包含比截图丰富百倍的信息！AI 能够读取视频画面和配乐，帮你一针见血地诊断 Fake Ad 套路和前 3 秒黄金 Hook。")
+# --- UA 视频批量输入区 ---
+st.subheader("📺 2. 附加：买量素材批量解析 (UA Videos Pattern Analysis)")
+st.info("💡 强力升级：支持同时分析多条视频！寻找竞品的“起量公式”和最高频的吸量套路。")
 
-ua_video_option = st.radio("选择提供视频的方式：", ["⬆️ 上传本地视频 (推荐，更稳定)", "🔗 输入 YouTube 视频链接"])
-ua_video_upload = None
-yt_url = ""
+ua_video_option = st.radio("选择提供视频的方式：", ["⬆️ 上传本地视频 (推荐，支持批量)", "🔗 输入 YouTube 视频链接 (批量)"])
+ua_video_uploads = []
+yt_url_text = ""
 
 if "上传" in ua_video_option:
-    ua_video_upload = st.file_uploader("上传竞品买量视频 (支持 mp4/mov，建议小于 50MB)", type=['mp4', 'mov'])
+    # 核心升级：accept_multiple_files 开启批量上传
+    ua_video_uploads = st.file_uploader("上传竞品买量视频 (最多建议 3-5 个，单视频 <50MB)", type=['mp4', 'mov'], accept_multiple_files=True)
 else:
-    yt_url = st.text_input("YouTube 视频链接 (例如: https://www.youtube.com/watch?v=...)")
+    yt_url_text = st.text_area("YouTube 视频链接 (支持多行批量输入，每行粘贴一个链接，最多建议 3-5 个)")
     st.caption("⚠️ 注：由于云服务器 IP 限制，部分 YouTube 视频可能会被拦截抓取。若报错，请改用本地上传。")
 
 if st.button("🚀 一键提取并分析", type="primary", use_container_width=True):
@@ -304,8 +326,8 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
         st.stop()
 
     game_data = {}
-    gemini_video_file = None
-    video_path_to_delete = None
+    gemini_video_files = []
+    video_paths_to_delete = []
     status_container = st.empty()
     
     with status_container.container():
@@ -328,24 +350,26 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                     game_data["App Store"] = ios_result
                     st.success("✅ App Store 数据就绪！")
         
-        # 2. 处理视频并上传给 Gemini
-        if ua_video_upload or yt_url:
-            with st.spinner("⏳ 正在预处理买量视频 (视频处理耗时较长，请耐心等待 10~30 秒)..."):
+        # 2. 批量处理视频并上传至 Gemini 
+        if ua_video_uploads or yt_url_text.strip():
+            with st.spinner("⏳ 正在并发预处理多批买量视频 (视文件数量可能需 10~40 秒，请耐心等待)..."):
                 try:
                     client = genai.Client(api_key=api_key)
                     
-                    if "上传" in ua_video_option and ua_video_upload:
-                        # 本地上传：保存为临时文件
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
-                            tmp.write(ua_video_upload.read())
-                            video_path_to_delete = tmp.name
-                            
-                    elif "YouTube" in ua_video_option and yt_url:
+                    # 2.1 本地批量保存
+                    if "上传" in ua_video_option and ua_video_uploads:
+                        for vid_file in ua_video_uploads[:5]: # 保险起见，截断前 5 个
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
+                                tmp.write(vid_file.read())
+                                video_paths_to_delete.append(tmp.name)
+                                
+                    # 2.2 YouTube 批量下载
+                    elif "YouTube" in ua_video_option and yt_url_text.strip():
                         if not yt_dlp:
                             st.error("未安装 yt-dlp 依赖，无法解析 YouTube 链接。请检查 requirements.txt")
                         else:
-                            st.info("⬇️ 正在从 YouTube 提取视频流...")
-                            # 仅下载预合并的 MP4 格式，避免需要 ffmpeg 环境
+                            st.info("⬇️ 正在循环提取 YouTube 视频流...")
+                            urls = [u.strip() for u in yt_url_text.split('\n') if u.strip()][:5]
                             ydl_opts = {
                                 'format': 'b[ext=mp4]/best', 
                                 'outtmpl': '%(id)s.%(ext)s',
@@ -353,24 +377,39 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                                 'noplaylist': True
                             }
                             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                                info = ydl.extract_info(yt_url, download=True)
-                                video_path_to_delete = ydl.prepare_filename(info)
+                                for url in urls:
+                                    try:
+                                        info = ydl.extract_info(url, download=True)
+                                        video_paths_to_delete.append(ydl.prepare_filename(info))
+                                    except Exception as e:
+                                        st.warning(f"视频 {url} 提取失败，已跳过: {e}")
                     
-                    # 将临时视频上传至 Gemini 引擎并轮询状态
-                    if video_path_to_delete and os.path.exists(video_path_to_delete):
-                        st.info("⬆️ 正在将视频传输至 AI 视觉核心引擎处理...")
-                        gemini_video_file = client.files.upload(file=video_path_to_delete)
+                    # 2.3 批量传输给大模型
+                    if video_paths_to_delete:
+                        st.info(f"⬆️ 正在将 {len(video_paths_to_delete)} 个视频推送至 AI 视觉核心引擎处理...")
                         
-                        # Gemini 处理视频需要时间，必须轮询等待状态变为 ACTIVE
-                        while gemini_video_file.state.name == "PROCESSING":
-                            time.sleep(2)
-                            gemini_video_file = client.files.get(name=gemini_video_file.name)
+                        # 批量 Upload
+                        for path in video_paths_to_delete:
+                            g_file = client.files.upload(file=path)
+                            gemini_video_files.append(g_file)
                             
-                        if gemini_video_file.state.name == "FAILED":
-                            st.error("❌ AI 引擎解析视频失败。")
-                            gemini_video_file = None
-                        else:
-                            st.success("✅ 视频视觉与音频特征提取完毕！")
+                        # 批量轮询等待：必须确保所有视频状态变为 ACTIVE
+                        active_files = []
+                        for i, f in enumerate(gemini_video_files):
+                            current_f = f
+                            while current_f.state.name == "PROCESSING":
+                                time.sleep(2)
+                                current_f = client.files.get(name=current_f.name)
+                            
+                            if current_f.state.name == "FAILED":
+                                st.error(f"❌ 视频 {i+1} 解析失败。")
+                            else:
+                                active_files.append(current_f)
+                                
+                        gemini_video_files = active_files
+                        
+                        if gemini_video_files:
+                            st.success(f"✅ {len(gemini_video_files)} 个视频的视觉与音频特征提取完毕！")
                             
                 except Exception as e:
                     st.error(f"❌ 视频获取或处理发生异常: {e}")
@@ -378,21 +417,20 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
     # 3. 开始 AI 聚合分析
     if game_data:
         st.divider()
-        st.subheader("🤖 AI 制作人全案拆解报告")
+        st.subheader("🤖 AI 制作人全案拆解报告 (含 UA 共性提炼)")
         
-        # 展示商店截图预览
         store_img_urls = []
         for p, d in game_data.items():
             if "截图" in d:
                 store_img_urls.extend(d["截图"])
         if store_img_urls:
-            st.markdown("**🔍 分析所参考的商店视觉素材：**")
+            st.markdown("**🔍 基础分析参考素材 (商店真实截图)：**")
             img_cols = st.columns(min(len(store_img_urls), 6))
             for idx, url in enumerate(store_img_urls[:6]):
                 img_cols[idx].image(url, use_container_width=True)
                 
-        with st.spinner("🧠 最终数据汇总中：AI 正在深度解码系统设计与 UA 策略，请稍候..."):
-            report = analyze_game_with_ai(game_data, gemini_video_file, api_key)
+        with st.spinner("🧠 终极推演中：AI 正在提取爆款公式并绘制多维商业图表，请稍候..."):
+            report = analyze_game_with_ai(game_data, gemini_video_files, api_key)
             
         render_dynamic_content(report)
         
@@ -400,9 +438,10 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
             clean_data = {p: {k: v for k, v in d.items() if k != "截图"} for p, d in game_data.items()}
             st.json(clean_data)
             
-    # 最后清理占用云服务器空间的临时视频文件
-    if video_path_to_delete and os.path.exists(video_path_to_delete):
-        try:
-            os.remove(video_path_to_delete)
-        except:
-            pass
+    # 彻底清理所有服务器临时视频文件
+    for path in video_paths_to_delete:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except:
+                pass
