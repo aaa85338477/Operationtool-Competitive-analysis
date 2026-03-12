@@ -64,7 +64,7 @@ def get_app_store_info(apple_url):
         return {"error": "无法从链接中提取 App Store ID"}
     app_id = match.group(1)
     try:
-        url = f"https://itunes.apple.com/lookup?id={app_id}&country=us"
+        url = f"[https://itunes.apple.com/lookup?id=](https://itunes.apple.com/lookup?id=){app_id}&country=us"
         response = requests.get(url)
         data = response.json()
         if data['resultCount'] == 0:
@@ -135,25 +135,36 @@ def extract_keyframes(video_path, num_frames=5):
 def render_dynamic_content(text):
     """动态解析 Markdown，渲染 Mermaid 流程图及 JSON 驱动的高级图表"""
     marker = "\x60\x60\x60"
-    pattern = r'(' + marker + r'(?:mermaid|json).*?' + marker + r')'
-    blocks = re.split(pattern, text, flags=re.DOTALL)
+    
+    # 【修复重点 1】：增强型正则，兼容 AI 输出时附带的空格、换行及大小写差异
+    pattern = r'(' + marker + r'\s*(?:mermaid|json)[\s\S]*?' + marker + r')'
+    blocks = re.split(pattern, text, flags=re.IGNORECASE)
     
     for block in blocks:
-        if block.startswith(marker + 'mermaid'):
-            mermaid_code = block.replace(marker + 'mermaid', '').replace(marker, '').strip()
+        stripped_block = block.strip()
+        
+        # 匹配 mermaid
+        if re.match(r'^' + marker + r'\s*mermaid', stripped_block, re.IGNORECASE):
+            # 精准剥离代码块外壳
+            mermaid_code = re.sub(r'^' + marker + r'\s*mermaid\s*', '', stripped_block, flags=re.IGNORECASE)
+            mermaid_code = re.sub(r'\s*' + marker + r'$', '', mermaid_code).strip()
+            
             mermaid_html = f"""
             <div class="mermaid" style="display: flex; justify-content: center;">
                 {mermaid_code}
             </div>
             <script type="module">
-                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+                import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
                 mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
             </script>
             """
             components.html(mermaid_html, height=450, scrolling=True)
             
-        elif block.startswith(marker + 'json'):
-            json_str = block.replace(marker + 'json', '').replace(marker, '').strip()
+        # 匹配 json
+        elif re.match(r'^' + marker + r'\s*json', stripped_block, re.IGNORECASE):
+            json_str = re.sub(r'^' + marker + r'\s*json\s*', '', stripped_block, flags=re.IGNORECASE)
+            json_str = re.sub(r'\s*' + marker + r'$', '', json_str).strip()
+            
             try:
                 data = json.loads(json_str)
                 has_visuals = False
@@ -219,7 +230,7 @@ def render_dynamic_content(text):
                 st.code(json_str, language='json')
                 
         else:
-            if block.strip():
+            if stripped_block:
                 st.markdown(block)
 
 # ================= 2. 中转站 SDK 核心分析模块 =================
@@ -227,7 +238,7 @@ def render_dynamic_content(text):
 def get_gemini_client(api_key):
     return genai.Client(
         api_key=api_key,
-        http_options={'base_url': 'https://api.bltcy.ai'}
+        http_options={'base_url': '[https://api.bltcy.ai](https://api.bltcy.ai)'}
     )
 
 def analyze_game_with_ai(game_data, extracted_video_frames, api_key):
@@ -246,6 +257,7 @@ def analyze_game_with_ai(game_data, extracted_video_frames, api_key):
                     
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
+    # 【修复重点 2】：强化 Prompt 中的格式约束，防止挤成一团
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
     我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了从【买量视频(UA Videos)中抽取的核心关键帧】。
@@ -253,10 +265,16 @@ def analyze_game_with_ai(game_data, extracted_video_frames, api_key):
     严格按照以下 Markdown 格式输出：
     
     ### 1. 市场定位
-    (请【分点列出】：目标受众人群画像、核心差异化卖点)
+    (请严格按照以下格式【分点列出】：
+    - **目标受众人群**：...
+    - **核心差异化卖点**：...)
     
     ### 2. 游戏画风（视觉拆解）
-    (⚠️ 务必直接观察提供的真实截图，请【分点列出】详细分析：色彩饱和度、2D/3D表现、UI排版风格、美术题材等特征)
+    (⚠️ 务必直接观察提供的真实截图，必须严格按照以下格式【分点列出】详细分析：
+    - **色彩饱和度**：...
+    - **2D/3D表现**：...
+    - **UI排版风格**：...
+    - **美术题材特征**：...)
     
     ### 3. 玩法类型
     (请简要概括：核心玩法、是否融合了副玩法)
@@ -267,7 +285,9 @@ def analyze_game_with_ai(game_data, extracted_video_frames, api_key):
     要求：代码必须包裹在 \x60\x60\x60mermaid 和 \x60\x60\x60 之间。
     
     ### 5. 成长与付费系统推测
-    (仅提供文字分析，请【分点推测】可能的养成维度与商业化设计)
+    (仅提供文字分析，请按照以下格式【分点推测】：
+    - **核心养成维度**：...
+    - **主要商业化设计**：...)
     
     ### 6. LiveOps 设计推测
     (仅提供文字分析，分析更新频率和日志内容，推测其长线运营节奏)
