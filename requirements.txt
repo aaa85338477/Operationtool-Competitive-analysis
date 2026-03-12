@@ -6,4 +6,3 @@ Pillow>=10.0.0
 plotly>=5.18.0
 pandas>=2.1.0
 yt-dlp
-opencv-python-headless
