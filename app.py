@@ -5,7 +5,6 @@ import requests
 import json
 import tempfile
 import os
-import time
 from datetime import datetime
 from io import BytesIO
 from PIL import Image
@@ -15,11 +14,16 @@ from google.genai import types
 import plotly.express as px
 import pandas as pd
 
-# 尝试导入 yt_dlp，如果失败会在前端报错提示
+# 尝试导入高级媒体处理库
 try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 # ================= 1. 数据清洗与抓取模块 =================
 
@@ -86,13 +90,47 @@ def load_image_from_url(url):
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         img = Image.open(BytesIO(response.content))
-        # 剥离原图 EXIF，防止元数据含中文引发崩溃
         clean_img = Image.new('RGB', img.size)
         clean_img.paste(img.convert('RGB'))
         return clean_img
     except Exception as e:
         print(f"图片加载失败 {url}: {e}")
         return None
+
+def extract_keyframes(video_path, num_frames=5):
+    """
+    智能切帧引擎：从视频中均匀提取关键帧，绕过代理服务器的大文件上传限制
+    """
+    frames = []
+    if not cv2:
+        st.warning("缺少 opencv-python-headless 库，无法提取视频帧。")
+        return frames
+        
+    try:
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return frames
+            
+        # 等距采样，避开极端的片头片尾 (例如 1/6, 2/6, ..., 5/6 处)
+        step = max(1, total_frames // (num_frames + 1))
+        
+        for i in range(1, num_frames + 1):
+            frame_idx = i * step
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if ret:
+                # BGR 转 RGB 并化为 PIL Image
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
+                # 压缩尺寸，防代理中转请求体过大
+                pil_img.thumbnail((800, 800))
+                frames.append(pil_img)
+        cap.release()
+    except Exception as e:
+        print(f"切帧失败: {e}")
+        
+    return frames
 
 def render_dynamic_content(text):
     """动态解析 Markdown，渲染 Mermaid 流程图及 JSON 驱动的高级图表"""
@@ -120,7 +158,6 @@ def render_dynamic_content(text):
                 data = json.loads(json_str)
                 has_visuals = False
                 
-                # ==== 第 1 排：养成雷达图 + 付费饼图 ====
                 if "progression_radar" in data and "monetization_pie" in data:
                     has_visuals = True
                     st.write("---") 
@@ -142,7 +179,6 @@ def render_dynamic_content(text):
                         fig_pie.update_traces(hole=.4, hoverinfo="label+percent") 
                         st.plotly_chart(fig_pie, use_container_width=True)
                 
-                # ==== 第 2 排：UA 素材特征雷达图 ====
                 if "ua_features_radar" in data and any(v > 0 for v in data["ua_features_radar"].values()):
                     has_visuals = True
                     st.write("---")
@@ -156,7 +192,6 @@ def render_dynamic_content(text):
                         fig_ua.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])))
                         st.plotly_chart(fig_ua, use_container_width=True)
                 
-                # ==== 第 3 排：LiveOps 甘特图 ====
                 if "liveops_timeline" in data:
                     has_visuals = True
                     timeline_data = data["liveops_timeline"]
@@ -187,17 +222,15 @@ def render_dynamic_content(text):
             if block.strip():
                 st.markdown(block)
 
-# ================= 2. 中转站 SDK 核心分析模块 (恢复视频解析) =================
+# ================= 2. 中转站 SDK 核心分析模块 =================
 
 def get_gemini_client(api_key):
-    """初始化接入中转站的 Gemini SDK Client"""
-    # 通过 http_options 强行重定向基准 URL 到底层中转站
     return genai.Client(
         api_key=api_key,
         http_options={'base_url': 'https://api.bltcy.ai'}
     )
 
-def analyze_game_with_ai(game_data, gemini_video_files, api_key):
+def analyze_game_with_ai(game_data, extracted_video_frames, api_key):
     client = get_gemini_client(api_key)
     
     text_data_for_ai = {}
@@ -211,12 +244,11 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
                 if img:
                     image_objects.append(img)
                     
-    # 转码确保安全传输
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
-    我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条买量视频(UA Videos)】。
+    我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了从【买量视频(UA Videos)中抽取的核心关键帧】。
     请深度拆解该游戏，以专业、简练的行业术语输出。
     严格按照以下 Markdown 格式输出：
     
@@ -241,10 +273,9 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     (仅提供文字分析，分析更新频率和日志内容，推测其长线运营节奏)
     
     ### 7. 买量素材批量拆解 (UA Creative Batch Analysis)
-    (⚠️ 务必检查输入内容中是否包含了买量视频。
-    - **如果包含了多个 UA 视频**：请发挥你的多模态能力，交叉比对这些视频，并提炼其“起量公式”。重点分析：【通用的前3秒黄金Hook】、【共同刺激的受众情绪痛点(如：强迫症、同情弱者、解压)】、【素材包装套路与真实玩法的差异】。
-    - **如果仅包含一个视频**：深度诊断该单一视频的上述各项视听觉特征。
-    - **如果没有提供视频**：请直接输出“未上传买量视频，跳过此环节深度分析”。)
+    (⚠️ 务必检查输入内容中是否包含了从买量视频抽取的关键帧图像。
+    - **如果包含了 UA 关键帧**：请按连环画逻辑推理其剧情，交叉比对提炼“起量公式”。重点分析：【推演的前3秒视觉Hook】、【共同刺激的受众情绪痛点(如：强迫症、同情弱者)】、【素材包装套路与真实玩法的差异(Fake Ad诊断)】。
+    - **如果没有提供图像**：请直接输出“未上传买量视频，跳过此环节深度分析”。)
     
     ---
     ### 📊 结构化可视化数据
@@ -261,7 +292,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     注意：
     - progression_radar 代表养成深度打分（满分10分），正好5个维度。
     - monetization_pie 代表核心付费点占比，各项数值相加必须为 100。
-    - ua_features_radar 代表这批买量素材的吸睛特征强度（满分10分），必须正好5个维度。**如果没有上传视频，请将此项的5个值全部填 0！**
+    - ua_features_radar 代表这批买量素材的吸睛特征强度（满分10分），必须正好5个维度。**如果没有关键帧，请将此项的5个值全部填 0！**
     - liveops_timeline 请根据抓取到的"最近更新时间"，向后合理推演未来 3 个月的模拟排期！包含 Event, Start(YYYY-MM-DD), Finish(YYYY-MM-DD), Type。
     """
 
@@ -269,10 +300,10 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
         contents_list = [f"以下是抓取到的游戏商店基础数据：\n{data_str}\n\n同时附带了一些真实的商店截图，请先阅读。"]
         contents_list.extend(image_objects)
         
-        # 将多个视频文件批量追加给大模型
-        if gemini_video_files:
-            contents_list.append("\n\n---\n以下是用户提供的该游戏【多条核心买量视频】。请务必交叉对比这些视频画面和声音，提炼买量共性：")
-            contents_list.extend(gemini_video_files)
+        # 将抽取的视频帧批量追加给大模型（模拟看视频）
+        if extracted_video_frames:
+            contents_list.append("\n\n---\n以下是从用户提供的【多条核心买量视频】中按时间轴抽取的黄金关键帧。请像看连环画一样推理素材剧情和起量共性：")
+            contents_list.extend(extracted_video_frames)
 
         response = client.models.generate_content(
             model='gemini-3.1-flash-lite-preview-thinking-high',
@@ -310,7 +341,7 @@ with col2:
 
 # --- UA 视频批量输入区 ---
 st.subheader("📺 2. 附加：买量视频批量解析 (UA Videos Pattern Analysis)")
-st.info("💡 强力升级：支持同时分析多条视频！寻找竞品的“起量公式”和最高频的吸量套路。")
+st.info("💡 强力升级：支持同时分析多条视频！系统将自动抽取关键帧进行推演，完美绕过代理商大文件拦截。")
 
 ua_video_option = st.radio("选择提供视频的方式：", ["⬆️ 上传本地视频 (推荐，支持批量)", "🔗 输入 YouTube 视频链接 (批量)"])
 ua_video_uploads = []
@@ -332,7 +363,7 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
         st.stop()
 
     game_data = {}
-    gemini_video_files = []
+    gemini_video_frames = [] # 改为存储从视频中抽取的 PIL Image 关键帧
     video_paths_to_delete = []
     status_container = st.empty()
     
@@ -356,12 +387,10 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                     game_data["App Store"] = ios_result
                     st.success("✅ App Store 数据就绪！")
         
-        # 2. 批量处理视频并上传至 Gemini (通过中转站代理)
+        # 2. 批量下载并切分视频帧 (完美避开 File API 封锁)
         if ua_video_uploads or yt_url_text.strip():
-            with st.spinner("⏳ 正在并发预处理多批买量视频 (视文件数量可能需 10~40 秒，请耐心等待)..."):
+            with st.spinner("⏳ 正在并发预处理多批买量视频 (此步骤会自动提取黄金关键帧，约 10~40 秒)..."):
                 try:
-                    client = get_gemini_client(api_key)
-                    
                     # 2.1 本地批量保存
                     if "上传" in ua_video_option and ua_video_uploads:
                         for vid_file in ua_video_uploads[:5]: 
@@ -377,15 +406,12 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                             st.info("⬇️ 正在循环提取 YouTube 视频流...")
                             urls = [u.strip() for u in yt_url_text.split('\n') if u.strip()][:5]
                             
-                            # 核心修复点：添加伪装参数以绕过 YouTube 的 403 Forbidden 封锁
                             ydl_opts = {
                                 'format': 'b[ext=mp4]/best', 
                                 'outtmpl': '%(id)s.%(ext)s',
                                 'quiet': True,
                                 'noplaylist': True,
-                                # 伪装成 Android 和 Web 客户端以突破 YouTube 限制
                                 'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-                                # 伪装常见浏览器 User-Agent
                                 'http_headers': {
                                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                                 }
@@ -398,34 +424,22 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
                                     except Exception as e:
                                         st.warning(f"视频 {url} 提取失败，已跳过: {e}")
                     
-                    # 2.3 批量传输给大模型
+                    # 2.3 提取关键帧并准备发给大模型
                     if video_paths_to_delete:
-                        st.info(f"⬆️ 正在将 {len(video_paths_to_delete)} 个视频推送至 AI 视觉核心引擎处理...")
-                        
+                        st.info(f"🎞️ 正在从 {len(video_paths_to_delete)} 个视频中提取黄金关键帧(避开代理大文件限制)...")
                         for path in video_paths_to_delete:
-                            g_file = client.files.upload(file=path)
-                            gemini_video_files.append(g_file)
-                            
-                        # 批量轮询等待：必须确保所有视频状态变为 ACTIVE
-                        active_files = []
-                        for i, f in enumerate(gemini_video_files):
-                            current_f = f
-                            while current_f.state.name == "PROCESSING":
-                                time.sleep(2)
-                                current_f = client.files.get(name=current_f.name)
-                            
-                            if current_f.state.name == "FAILED":
-                                st.error(f"❌ 视频 {i+1} 解析失败。这可能是因为代理中转站未完全支持大文件上传接口(File API)。")
-                            else:
-                                active_files.append(current_f)
+                            # 每个视频抽取 5 张代表性截图
+                            frames = extract_keyframes(path, num_frames=5)
+                            if frames:
+                                gemini_video_frames.extend(frames)
                                 
-                        gemini_video_files = active_files
-                        
-                        if gemini_video_files:
-                            st.success(f"✅ {len(gemini_video_files)} 个视频的视觉与音频特征提取完毕！")
+                        if gemini_video_frames:
+                            st.success(f"✅ 成功从视频中提取 {len(gemini_video_frames)} 张核心帧供 AI 分析！")
+                        else:
+                            st.error("❌ 视频切帧失败，请确保要求库已安装。")
                             
                 except Exception as e:
-                    st.error(f"❌ 视频获取或处理发生异常: {e}\n(提示：大部分中转平台支持对话接口，但可能拦截了 File API 大文件上传接口。如果持续报错，建议暂时停用视频分析功能。)")
+                    st.error(f"❌ 视频获取或处理发生异常: {e}")
                     
     # 3. 开始 AI 聚合分析
     if game_data:
@@ -442,8 +456,15 @@ if st.button("🚀 一键提取并分析", type="primary", use_container_width=T
             for idx, url in enumerate(store_img_urls[:6]):
                 img_cols[idx].image(url, use_container_width=True)
                 
+        # 展示抽取的视频帧缩略图
+        if gemini_video_frames:
+            st.markdown("**🎬 自动提取的买量素材关键帧：**")
+            frame_cols = st.columns(min(len(gemini_video_frames), 6))
+            for idx, frame in enumerate(gemini_video_frames[:6]):
+                frame_cols[idx].image(frame, use_container_width=True)
+                
         with st.spinner(f"🧠 终极推演中：调用 gemini-3.1-flash-lite-preview-thinking-high 提取爆款公式，请稍候..."):
-            report = analyze_game_with_ai(game_data, gemini_video_files, api_key)
+            report = analyze_game_with_ai(game_data, gemini_video_frames, api_key)
             
         render_dynamic_content(report)
         
