@@ -220,7 +220,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
                     
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
-    # 核心升级：ua_features_radar 的键名改为强制 AI 动态生成
+    # 核心升级：新增第9点和第10点的转化漏斗与突围创意指令
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
     我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条完整的买量视频(UA Videos)】。
@@ -270,6 +270,14 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     - **如果包含了 UA 视频**：请挑选其中表现力最强的一条视频，扮演“买量创意总监”，将其逆向拆解为可让外包团队直接执行的【分镜头脚本】。**必须输出一个标准的 Markdown 表格**，表头必须严格包含：| 时间轴 (如0s-3s) | 画面描述 (镜头/运镜/场景) | 音效与BGM | 包装文案/字幕 |。
     - **如果没有提供视频**：请直接输出“未上传买量视频，跳过翻拍脚本生成”。)
     
+    ### 9. 转化漏斗末端：CTA 与 End-Card 专项分析
+    (⚠️ 务必检查输入内容中是否包含了原生买量视频。
+    - **如果包含了 UA 视频**：请专门针对视频的最后3-5秒进行拆解。分析其诱导下载的手段(如：是否使用 Fake UI 虚假交互按钮、擦边诱惑、制造时间紧迫感)、Call-To-Action (CTA) 的转化意图强度，以及 End-Card 的视觉设计是否能有效承接前面的剧情。
+    - **如果没有提供视频**：请直接输出“未上传买量视频，跳过此环节深度分析”。)
+    
+    ### 10. 终极赋能：买量突围创意反向生成 (Counter-Strategy Ideation)
+    (作为顶尖买量操盘手，在洞察了上述竞品的套路后，请指出其“内容盲区”或容易让玩家审美疲劳的点，并【分点列出】2-3个具有颠覆性的**反向突围创意**。例如：竞品主打“拯救弱者”，建议反向测试“扮演反派施虐”的爽感剧情。要求脑洞大开且具备商业转化可行性。)
+    
     ---
     ### 📊 结构化可视化数据
     在所有的文字分析结束后，**必须**附带唯一一段纯 JSON 代码（使用 \x60\x60\x60json 和 \x60\x60\x60 包裹），用于生成图表。
@@ -295,7 +303,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
         
         # 将原生的视频 File 对象直接传给模型
         if gemini_video_files:
-            contents_list.append("\n\n---\n以下是用户提供的【多条原生核心买量视频】。请仔细观看画面、聆听声音，交叉比对提取买量公式，并逆向生成分镜头脚本：")
+            contents_list.append("\n\n---\n以下是用户提供的【多条原生核心买量视频】。请仔细观看画面、聆听声音，交叉比对提取买量公式，并逆向生成分镜头脚本与转化策略：")
             contents_list.extend(gemini_video_files)
 
         response = client.models.generate_content(
