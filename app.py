@@ -109,7 +109,6 @@ def render_dynamic_content(text):
         
         # 匹配 mermaid
         if re.match(r'^' + marker + r'{3,}[ \t]*mermaid', stripped_block, re.IGNORECASE):
-            # 精准剥离代码块外壳
             mermaid_code = re.sub(r'^' + marker + r'{3,}[ \t]*mermaid[ \t]*\n', '', stripped_block, flags=re.IGNORECASE)
             mermaid_code = re.sub(r'\n?[ \t]*' + marker + r'{3,}$', '', mermaid_code).strip()
             
@@ -121,7 +120,7 @@ def render_dynamic_content(text):
                 {safe_mermaid}
             </div>
             <script type="module">
-                import mermaid from '[https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs](https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs)';
+                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
                 mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
             </script>
             """
@@ -165,7 +164,8 @@ def render_dynamic_content(text):
                         ua_data = data["ua_features_radar"]
                         df_ua = pd.DataFrame(dict(r=list(ua_data.values()), theta=list(ua_data.keys())))
                         df_ua = pd.concat([df_ua, df_ua.iloc[[0]]], ignore_index=True)
-                        fig_ua = px.line_polar(df_ua, r='r', theta='theta', line_close=True, title="🎬 UA买量特征画像 (基于原生视频分析)")
+                        # 副标题强调这是 AI 智能动态提炼的结果
+                        fig_ua = px.line_polar(df_ua, r='r', theta='theta', line_close=True, title="🎬 UA买量特征画像 (AI智能动态提炼)")
                         fig_ua.update_traces(fill='toself', line_color='#FF0055') 
                         fig_ua.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 10])))
                         st.plotly_chart(fig_ua, use_container_width=True)
@@ -220,7 +220,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
                     
     data_str = json.dumps(text_data_for_ai, indent=2, ensure_ascii=True)
     
-    # 核心升级：新增“第8项”翻拍脚本逆向指令，强制输出 Markdown 表格，并强化图表与列表格式规范
+    # 核心升级：ua_features_radar 的键名改为强制 AI 动态生成
     system_instruction = """
     你现在是一位拥有10年经验的海外手游制作人兼高级发行总监。
     我为你提供了该游戏的【商店文案数据】以及【真实的商店游戏截图】。同时，用户可能还提供了【多条完整的买量视频(UA Videos)】。
@@ -277,7 +277,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     {
       "progression_radar": {"等级与基础属性": 8, "装备与词条": 9, "技能与流派拓展": 5, "外观收集": 3, "其他养成": 6}, 
       "monetization_pie": {"抽卡/开箱": 40, "战令/通行证": 30, "破冰/限时礼包": 20, "资源直购": 10},
-      "ua_features_radar": {"解压ASMR (Satisfying)": 8, "故意失败 (Fail Ad)": 9, "剧情反转 (Drama)": 4, "智商碾压 (IQ Test)": 7, "擦边/猎奇 (Bizarre)": 3},
+      "ua_features_radar": {"<动态标签1>": 8, "<动态标签2>": 9, "<动态标签3>": 4, "<动态标签4>": 7, "<动态标签5>": 3},
       "liveops_timeline": [
         {"Event": "当前版本更新", "Start": "2023-10-01", "Finish": "2023-10-01", "Type": "版本更新"}
       ]
@@ -285,7 +285,7 @@ def analyze_game_with_ai(game_data, gemini_video_files, api_key):
     注意：
     - progression_radar 代表养成深度打分（满分10分），正好5个维度。
     - monetization_pie 代表核心付费点占比，各项数值相加必须为 100。
-    - ua_features_radar 代表这批买量素材的吸睛特征强度（满分10分），必须正好5个维度。**如果没有视频输入，请将此项的5个值全部填 0！**
+    - ua_features_radar 代表这批买量素材的吸睛特征强度（满分10分），必须正好5个维度。⚠️ **核心要求：你必须根据该游戏的实际品类和买量视频内容，动态提取5个最贴切的特征标签作为 JSON 的键名(Key)**！例如：SLG可能是"策略碾压"/"背叛复仇"/"真实战争"，二次元可能是"角色立绘"/"CV表现"/"宿命剧情"。**如果没有上传视频，请随意写5个品类相关的标签并将值全部填 0！**
     - liveops_timeline 请根据抓取到的"最近更新时间"，向后合理推演未来 3 个月的模拟排期！包含 Event, Start(YYYY-MM-DD), Finish(YYYY-MM-DD), Type。
     """
 
